@@ -1,7 +1,7 @@
 """This MainWindow is a sample of what an actual implementation should
 look like. """
-from PySide6.QtCore import QFile
-from PySide6.QtUiTools import QUiLoader
+
+from PySide6.QtWidgets import QLabel, QLineEdit
 from icecream import ic
 
 from basewindow import BaseWindow
@@ -15,14 +15,19 @@ class MainWindow(BaseWindow):
   def __init__(self, title=None):
     title = 'Sample Window' if title is None else title
     BaseWindow.__init__(self, title)
-    self.loader = QUiLoader()
-    self.loader.addPluginPath('uis')
-    self.welcomeFid = 'uis/welcome.ui'
-    self.welcomeFile = QFile(self.welcomeFid)
-    self.welcomeFile.open(QFile.ReadOnly)
-    ic(self.welcomeFile)
-    self.welcomeWindow = self.loader.load(self.welcomeFile)
+    self.label = QLabel(self)
+    self.label.setText('Hello World!')
+    self.lineEdit = QLineEdit(self)
+    self.lineEdit.setPlaceholderText('Test line edit')
+    self.data = {'text': None}
+    self.getters = {
+      'text': self.lineEdit.text
+    }
+    self.setters = {
+      'text': self.lineEdit.setText
+    }
 
   def setupWidgets(self):
-    """Addds the welcome window"""
-    self.baseLayout.addWidget(self.welcomeWindow, 0, 0, 1, 1)
+    """Reimplementation of setupWidgets"""
+    self.baseLayout.addWidget(self.label, 0, 0, 1, 1)
+    self.baseLayout.addWidget(self.lineEdit, 1, 0, 1, 1, )

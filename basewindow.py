@@ -8,13 +8,18 @@ import os
 import pickle
 from typing import NoReturn
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QKeyEvent, QMouseEvent
-from PySide6.QtWidgets import QGridLayout, QMainWindow, QStatusBar, QWidget
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QKeyEvent, QMouseEvent
+from PySide6.QtWidgets import QGridLayout, QMainWindow, QMessageBox, \
+  QWidget
 from icecream import ic
 
 from filedialogs import FileDialog
+from menubars import MenuBar
 from mousefilter import ClickEvent
+from statusbar import StatusBar
+
+ic.configureOutput(includeContext=True)
 
 
 class BaseWindow(QMainWindow):
@@ -35,36 +40,93 @@ class BaseWindow(QMainWindow):
     return out
 
   def __init__(self, title=None):
-    if title is None:
-      title = 'QtYnotPy'
+    title = 'QtYnotPy' if title is None else title
     self._filters = ['JPEG image (*.jpg *.jpeg *.jpe)']
     QMainWindow.__init__(self)
     self.clicker = ClickEvent(self)
-    ic(self.clicker.__call__)
+    self.timeLimit = 1
     self.setWindowTitle(title)
+    #  Layouts
     self.baseWidget = QWidget(self)
     self.baseLayout = QGridLayout(self.baseWidget)
     self.setCentralWidget(self.baseWidget)
     self.setGeometry(300, 300, 640, 480)
-    self.timeLimit = 1
     self.ui = None
+    #  Dialogs
     self.openFileDialog = FileDialog.loadFile(self)
     self.loadDirDialog = FileDialog.loadDir(self)
     self.saveFileDialog = FileDialog.saveFile(self)
+    #  Actions
+    self.saveAction = QAction()
+    self.saveAsAction = QAction()
+    self.newAction = QAction()
+    self.openAction = QAction()
+    self.propAction = QAction()
+    self.docAction = QAction()
+    self.aboutQtAction = QAction()
+    #  MenuBar
+    self.setMenuBar(MenuBar.Basic(self))
+    #  StatusBar
+    self.setStatusBar(StatusBar(self))
+    #  Data
     self.dataFid = ''
-    self.events = {}
+    self._requireFileName = True
+    self._dataFilePath = None
+    self._dataFileName = None
+    self._dataFileExt = 'ext'
     self.data = {}
-    self.stBar = QStatusBar(self)
+    self.getters = {}
+    self.setters = {}
+    #  Other
+    self.events = {}
+    #  Status Bar
+    self.stBar = StatusBar(self)
     self.setStatusBar(self.stBar)
-    self.timer = QTimer()
-    self.timer.setInterval(100)
-    self.timer.timeout.connect(self.debug)
 
   def debug(self):
     """Happens every 100ms"""
     msg = 'Mouse waiting for %s'
     msg = msg % ('release' if self.clicker.active else 'press')
     self.statusBar().showMessage(msg)
+
+  @property
+  def requireFileName(self) -> bool:
+    """Flag indicating that the current file name is default, such as
+    untitled07. Should return false after first successful run of save as
+    method. """
+    return self._requireFileName
+
+  @requireFileName.setter
+  def requireFileName(self, value: bool) -> NoReturn:
+    self._requireFileName = value
+
+  @property
+  def dataFileName(self):
+    """The filename of the currently active instance. Contains only the
+    filename itself, not the path nor the extension."""
+    return os.path.splitext(os.path.basename(self.dataFilePath))[0]
+
+  @dataFileName.setter
+  def dataFileName(self, *_):
+    raise TypeError('dataFileName should not be set directly!')
+
+  @property
+  def dataFileExt(self):
+    """The file extension of the file."""
+    return os.path.splitext(os.path.basename(self.dataFilePath))[1]
+
+  @dataFileExt.setter
+  def dataFileExt(self, value):
+    raise TypeError('dataFileExt should not be set directly!')
+
+  @property
+  def dataFilePath(self):
+    """The full path to the data file"""
+    return self._dataFilePath
+
+  @dataFilePath.setter
+  def dataFilePath(self, value):
+    self._dataFilePath = value
 
   @property
   def filters(self):
@@ -75,19 +137,82 @@ class BaseWindow(QMainWindow):
   def filters(self, value):
     self._filters = value
 
+  def unsavedChanges(self):
+    """The instance data variable contains the most recently saved data.
+    The save function first updates the contents of this variable,
+    and then saves the variable to the disk. Thus, any discrepancy between
+    the data variable and its sources indicates the presence of unsaved
+    changes. """
+    for (key, val) in self.data.items():
+      if self.accessAppData(key, 'get')() != val:
+        return True
+    return False
+
+  def maybeSave(self, btn: QMessageBox.StandardButton) -> bool:
+    """Opens a confirmation dialog if unsaved changes are present. If the
+    user accepts or if there are no saved changes present, returns True.
+    Otherwise, returns False"""
+    if not self.unsavedChanges():
+      return True
+    if btn == QMessageBox.StandardButton.Save:
+      self.saveFunc()
+    if btn == QMessageBox.StandardButton.Ignore:
+      return True
+    if btn == QMessageBox.StandardButton.Cancel:
+      return False
+
+  def saveChangesToData(self):
+    """Updates the contents of the instance data variable as described by
+    the getter functions of accessAppData. Used by the save file
+    functions."""
+    for (key, val) in self.data.items():
+      self.data[key] = self.getters[key]()
+
+  def applyValuesFromData(self):
+    """Sets the values in the application to the values currently in the
+    instance data variable. Used by the open function."""
+    for (key, val) in self.data.items():
+      self.data[key] = self.setters[key](val)
+
+  def docFunc(self):
+    """Opens documentation"""
+    QDesktopServices.openUrl(QUrl.fromLocalFile('./README.md'))
+
+  def propFunc(self):
+    """Opens properties window"""
+    QDesktopServices.openUrl(QUrl.fromLocalFile('./properties.txt'))
+
+  def aboutQtFunc(self):
+    """Opens properties window"""
+    QMessageBox.aboutQt(self)
+
   def saveAsFunc(self):
     """This method saves the data in the self.data dictionary to pickled
     file on the disk."""
     files = self.saveFileDialog()
     if files:
-      with open(self.dataFid, 'wb') as f:
-        pickle.dump(self.data, f)
+      self.dataFilePath = os.path.abspath(files)
+      self.requireFileName = False
+      return self.saveFunc()
+    return False
+
+  def newFunc(self):
+    """This method creates a new instance. Checks for unsaved changes and
+    prompts user if necessary."""
 
   def saveFunc(self):
     """This method actually saves the data on the disk. It is triggered by
     either the saveAsFunc or by the save action. """
+    if not self.unsavedChanges():
+      return
+    if self.requireFileName:
+      return self.saveAsFunc()
+    self.saveChangesToData()
+    with open(self.dataFilePath, 'wb') as f:
+      pickle.dump(self.data, f)
+      return True
 
-  def loadFunc(self):
+  def openFunc(self):
     """This method opens the disk allowing the user to select an
     existing file which is then opened but applying its values on the
     self.data variable"""
@@ -110,6 +235,25 @@ class BaseWindow(QMainWindow):
   def setupWidgets(self):
     """This abstract method must be reimplemented by subclasses"""
 
+  def setupActions(self):
+    """Connects actions to their relevant methods. This method is called
+    automatically as part of the show event. It should also be called
+    after changes are made to actions and menus."""
+    self.saveAction.triggered.connect(self.saveFunc)
+    self.saveAsAction.triggered.connect(self.saveAsFunc)
+    self.newAction.triggered.connect(self.newFunc)
+    self.openAction.triggered.connect(self.openFunc)
+    self.propAction.triggered.connect(self.docFunc)
+    self.docAction.triggered.connect(self.propFunc)
+    self.aboutQtAction.triggered.connect(self.aboutQtFunc)
+
+    for (key, val) in self.__dict__.items():
+      if isinstance(val, QAction):
+        val.setStatusTip(val.text())
+        val.setWhatsThis(val.text())
+        val.setToolTip(val.text())
+        val.setIconText(val.__str__())
+
   def loadUi(self):
     """This method replaces setupWidgets when window is created from a ui
     file. If reimplemented, setupWidgets should point to this function."""
@@ -125,8 +269,8 @@ class BaseWindow(QMainWindow):
     order."""
     self.preSetup()
     self.setupWidgets()
+    self.setupActions()
     self.postSetup()
-    self.timer.start()
 
   def mousePressEvent(self, event: QMouseEvent):
     """The event functions include a filter on their events, greatly
@@ -147,7 +291,6 @@ class BaseWindow(QMainWindow):
 
   def singleClick(self, e: ClickEvent) -> NoReturn:
     """This function should be reimplemented by subclasses as needed. """
-    pass
 
   def doubleClick(self, e: ClickEvent) -> NoReturn:
     """This function should be reimplemented by subclasses as needed. """
